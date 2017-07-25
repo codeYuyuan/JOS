@@ -32,28 +32,24 @@ nvram_read(int r)
 static void
 i386_detect_memory(void)
 {
-	size_t basemem, extmem, ext16mem, totalmem;
+	size_t npages_extmem;
 
 	// Use CMOS calls to measure available base & extended memory.
 	// (CMOS calls return results in kilobytes.)
-	basemem = nvram_read(NVRAM_BASELO);
-	extmem = nvram_read(NVRAM_EXTLO);
-	ext16mem = nvram_read(NVRAM_EXT16LO) * 64;
+	npages_basemem = (nvram_read(NVRAM_BASELO) * 1024) / PGSIZE;
+	npages_extmem = (nvram_read(NVRAM_EXTLO) * 1024) / PGSIZE;
 
 	// Calculate the number of physical pages available in both base
 	// and extended memory.
-	if (ext16mem)
-		totalmem = 16 * 1024 + ext16mem;
-	else if (extmem)
-		totalmem = 1 * 1024 + extmem;
+	if (npages_extmem)
+		npages = (EXTPHYSMEM / PGSIZE) + npages_extmem;
 	else
-		totalmem = basemem;
-
-	npages = totalmem / (PGSIZE / 1024);
-	npages_basemem = basemem / (PGSIZE / 1024);
+		npages = npages_basemem;
 
 	cprintf("Physical memory: %uK available, base = %uK, extended = %uK\n",
-		totalmem, basemem, totalmem - basemem);
+		npages * PGSIZE / 1024,
+		npages_basemem * PGSIZE / 1024,
+		npages_extmem * PGSIZE / 1024);
 }
 
 
@@ -102,8 +98,11 @@ boot_alloc(uint32_t n)
 	// to a multiple of PGSIZE.
 	//
 	// LAB 2: Your code here.
-
-	return NULL;
+    result = nextfree;
+    nextfree = ROUNDUP(nextfree+n, PGSIZE);
+    if((uint32_t)nextfree - KERNBASE > npages * PGSIZE)
+        panic("Error: Run out of memory\n");
+	return result;
 }
 
 // Set up a two-level page table:
@@ -145,10 +144,10 @@ mem_init(void)
 	// Allocate an array of npages 'struct PageInfo's and store it in 'pages'.
 	// The kernel uses this array to keep track of physical pages: for
 	// each physical page, there is a corresponding struct PageInfo in this
-	// array.  'npages' is the number of physical pages in memory.  Use memset
-	// to initialize all fields of each struct PageInfo to 0.
+	// array.  'npages' is the number of physical pages in memory.
 	// Your code goes here:
-
+    pages = (struct PageInfo *)boot_alloc(sizeof(struct PageInfo) * npages);
+    memset(pages, 0, sizeof(struct PageInfo) * npages);
 
 	//////////////////////////////////////////////////////////////////////
 	// Now that we've allocated the initial kernel data structures, we set
@@ -251,12 +250,19 @@ page_init(void)
 	// Change the code to reflect this.
 	// NB: DO NOT actually touch the physical memory corresponding to
 	// free pages!
+
 	size_t i;
-	for (i = 0; i < npages; i++) {
-		pages[i].pp_ref = 0;
-		pages[i].pp_link = page_free_list;
-		page_free_list = &pages[i];
-	}
+    pages[0].pp_ref = 1;
+    for(i = 1; i<npages; i++){
+        if(i >= IOPHYSMEM/PGSIZE && i<EXTPHYSMEM ){
+            pages[i].pp_ref =1;
+        }else{
+            pages[i].pp_ref = 0;
+		    pages[i].pp_link = page_free_list;
+		    page_free_list = &pages[i];
+        }
+    }
+
 }
 
 //
@@ -265,9 +271,6 @@ page_init(void)
 // count of the page - the caller must do these if necessary (either explicitly
 // or via page_insert).
 //
-// Be sure to set the pp_link field of the allocated page to NULL so
-// page_free can check for double-free bugs.
-//
 // Returns NULL if out of free memory.
 //
 // Hint: use page2kva and memset
@@ -275,7 +278,15 @@ struct PageInfo *
 page_alloc(int alloc_flags)
 {
 	// Fill this function in
-	return 0;
+    if(page_free_list == NULL)
+        return NULL;
+    struct PageInfo *current = page_free_list;
+    page_free_list = current->pp_link;
+    current->pp_link = NULL;
+    if(alloc_flags & ALLOC_ZERO)
+        memset(page2kva(current), 0, PGSIZE);
+
+	return current;
 }
 
 //
@@ -286,8 +297,10 @@ void
 page_free(struct PageInfo *pp)
 {
 	// Fill this function in
-	// Hint: You may want to panic if pp->pp_ref is nonzero or
-	// pp->pp_link is not NULL.
+    assert(pp->pp_ref == 0);
+    assert(pp->pp_link == NULL);
+    pp->pp_link = page_free_list;
+    page_free_list = pp;
 }
 
 //
@@ -313,12 +326,12 @@ page_decref(struct PageInfo* pp)
 //	the page is cleared,
 //	and pgdir_walk returns a pointer into the new page table page.
 //
-// Hint 1: you can turn a PageInfo * into the physical address of the
+// Hint 1: you can turn a Page * into the physical address of the
 // page it refers to with page2pa() from kern/pmap.h.
 //
 // Hint 2: the x86 MMU checks permission bits in both the page directory
 // and the page table, so it's safe to leave permissions in the page
-// directory more permissive than strictly necessary.
+// more permissive than strictly necessary.
 //
 // Hint 3: look at inc/mmu.h for useful macros that mainipulate page
 // table and page directory entries.
@@ -332,8 +345,7 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
 
 //
 // Map [va, va+size) of virtual address space to physical [pa, pa+size)
-// in the page table rooted at pgdir.  Size is a multiple of PGSIZE, and
-// va and pa are both page-aligned.
+// in the page table rooted at pgdir.  Size is a multiple of PGSIZE.
 // Use permission bits perm|PTE_P for the entries.
 //
 // This function is only intended to set up the ``static'' mappings
@@ -741,11 +753,6 @@ check_page(void)
 	assert(check_va2pa(kern_pgdir, PGSIZE) == page2pa(pp1));
 	assert(pp1->pp_ref == 1);
 	assert(pp2->pp_ref == 0);
-
-	// test re-inserting pp1 at PGSIZE
-	assert(page_insert(kern_pgdir, pp1, (void*) PGSIZE, 0) == 0);
-	assert(pp1->pp_ref);
-	assert(pp1->pp_link == NULL);
 
 	// unmapping pp1 at PGSIZE should free it
 	page_remove(kern_pgdir, (void*) PGSIZE);
