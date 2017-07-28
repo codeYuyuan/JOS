@@ -10,6 +10,7 @@
 #include <kern/console.h>
 #include <kern/monitor.h>
 #include <kern/kdebug.h>
+#include <kern/pmap.h>
 
 #define CMDBUF_SIZE	80	// enough for one VGA text line
 
@@ -24,7 +25,8 @@ struct Command {
 static struct Command commands[] = {
 	{ "help", "Display this list of commands", mon_help },
 	{ "kerninfo", "Display information about the kernel", mon_kerninfo },
-    { "backtrace", "Display a list of function call frames", mon_backtrace }
+  { "backtrace", "Display a list of function call frames", mon_backtrace },
+  { "showmappings", "Display a list of virtual-physical memory mappings", mon_showmappings}
 };
 
 /***** Implementations of basic kernel monitor commands *****/
@@ -76,7 +78,29 @@ mon_backtrace(int argc, char **argv, struct Trapframe *tf)
 	return 0;
 }
 
-
+int 
+mon_showmappings(int argc, char **argv, struct Trapframe *tf)
+{
+  if(argc != 3 ){
+    cprintf("Usage: showmappings 0xbegin 0xend\n");
+    return 0;
+  } 
+  uint32_t start = strtol(argv[1] + 2, NULL, 16), end = strtol(argv[2] + 2, NULL, 16);
+  for(;start<end; start+=PGSIZE){
+    pte_t *pte = pgdir_walk(kern_pgdir, (void *)start, 0);
+    if(!pte){
+      panic("Out of memory\n");
+      return 0;
+    }
+    else if(!(*pte)){
+      cprintf("No mapping here\n");
+    }else{
+      cprintf("Page %x:", start);
+      cprintf("PTE_P %x, PTE_W %x, PTE_U %x\n", *pte&PTE_P, (*pte&PTE_W)>>1, (*pte&PTE_U)>>2);
+    }
+  }
+  return 0;
+}
 
 /***** Kernel monitor command interpreter *****/
 
