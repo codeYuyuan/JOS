@@ -186,7 +186,7 @@ env_setup_vm(struct Env *e)
 	//    - The functions in kern/pmap.h are handy.
 
 	// LAB 3: Your code here.
-  e->env_pgdir = page2kva(p);
+  e->env_pgdir = (pde_t *)page2kva(p);
   p->pp_ref++;
   memcpy(e->env_pgdir, kern_pgdir,PGSIZE);
 	// UVPT maps the env's own page table read-only.
@@ -279,7 +279,7 @@ region_alloc(struct Env *e, void *va, size_t len)
   struct PageInfo *p=NULL;
   va = ROUNDDOWN(va, PGSIZE);
   void *end = (void *)ROUNDUP(va + len, PGSIZE);
-  for(;va<=end;va+=PGSIZE){
+  for(;va<end;va+=PGSIZE){
     if(!(p=page_alloc(ALLOC_ZERO)))
       panic("page alloc failed.\n");
     if(page_insert(e->env_pgdir, p, va, PTE_W|PTE_U))
