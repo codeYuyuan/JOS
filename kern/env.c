@@ -118,15 +118,15 @@ void
 env_init(void)
 {
 	// Set up envs array
-	// LAB 3: Your code here.
-  int i;
-  env_free_list = NULL;
-  for(i = NENV - 1; i>=0; i--){
-    envs[i].env_status = ENV_FREE;
-    envs[i].env_id = 0;
-    envs[i].env_link = env_free_list;
-    env_free_list = &envs[i];
-  }
+	int i;
+	env_free_list = NULL;
+
+	for (i = NENV - 1; i >= 0; i--) {
+		envs[i].env_id = 0;
+		envs[i].env_status = ENV_FREE;
+		envs[i].env_link = env_free_list;
+		env_free_list = &envs[i];
+	}
 	// Per-CPU part of the initialization
 	env_init_percpu();
 }
@@ -138,15 +138,15 @@ env_init_percpu(void)
 	lgdt(&gdt_pd);
 	// The kernel never uses GS or FS, so we leave those set to
 	// the user data segment.
-	asm volatile("movw %%ax,%%gs" : : "a" (GD_UD|3));
-	asm volatile("movw %%ax,%%fs" : : "a" (GD_UD|3));
+	asm volatile("movw %%ax,%%gs" :: "a" (GD_UD|3));
+	asm volatile("movw %%ax,%%fs" :: "a" (GD_UD|3));
 	// The kernel does use ES, DS, and SS.  We'll change between
 	// the kernel and user data segments as needed.
-	asm volatile("movw %%ax,%%es" : : "a" (GD_KD));
-	asm volatile("movw %%ax,%%ds" : : "a" (GD_KD));
-	asm volatile("movw %%ax,%%ss" : : "a" (GD_KD));
+	asm volatile("movw %%ax,%%es" :: "a" (GD_KD));
+	asm volatile("movw %%ax,%%ds" :: "a" (GD_KD));
+	asm volatile("movw %%ax,%%ss" :: "a" (GD_KD));
 	// Load the kernel text segment into CS.
-	asm volatile("ljmp %0,$1f\n 1:\n" : : "i" (GD_KT));
+	asm volatile("ljmp %0,$1f\n 1:\n" :: "i" (GD_KT));
 	// For good measure, clear the local descriptor table (LDT),
 	// since we don't use it.
 	lldt(0);
@@ -187,11 +187,17 @@ env_setup_vm(struct Env *e)
 	//	is an exception -- you need to increment env_pgdir's
 	//	pp_ref for env_free to work correctly.
 	//    - The functions in kern/pmap.h are handy.
+	e->env_pgdir = (pde_t *) page2kva(p);
+	p->pp_ref++;
+	
+	// Initialize the directory below UTOP.
+	for (i = 0; i < PDX(UTOP); i++)
+		e->env_pgdir[i] = 0;
 
-	// LAB 3: Your code here.
-  e->env_pgdir = (pde_t *)page2kva(p);
-  p->pp_ref++;
-  memcpy(e->env_pgdir, kern_pgdir,PGSIZE);
+	// Map the directory above UTOP
+	for ( i = PDX(UTOP); i < NPDENTRIES; i++)
+		e->env_pgdir[i] = kern_pgdir[i];
+
 	// UVPT maps the env's own page table read-only.
 	// Permissions: kernel R, user R
 	e->env_pgdir[PDX(UVPT)] = PADDR(e->env_pgdir) | PTE_P | PTE_U;
@@ -256,13 +262,15 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 
 	// Enable interrupts while in user mode.
 	// LAB 4: Your code here.
-
+	e->env_tf.tf_eflags |= FL_IF;
 	// Clear the page fault handler until user installs one.
 	e->env_pgfault_upcall = 0;
 
 	// Also clear the IPC receiving flag.
 	e->env_ipc_recving = 0;
 
+	// Set normal priority 
+	e->env_priority = ENV_PRIOR_NORMAL;
 	// commit the allocation
 	env_free_list = e->env_link;
 	*newenv_store = e;
@@ -281,22 +289,27 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 static void
 region_alloc(struct Env *e, void *va, size_t len)
 {
-	// LAB 3: Your code here.
-	// (But only if you need it for load_icode.)
-	//
 	// Hint: It is easier to use region_alloc if the caller can pass
 	//   'va' and 'len' values that are not page-aligned.
 	//   You should round va down, and round (va + len) up.
 	//   (Watch out for corner-cases!)
-  struct PageInfo *p=NULL;
-  va = ROUNDDOWN(va, PGSIZE);
-  void *end = (void *)ROUNDUP(va + len, PGSIZE);
-  for(;va<end;va+=PGSIZE){
-    if(!(p=page_alloc(ALLOC_ZERO)))
-      panic("page alloc failed.\n");
-    if(page_insert(e->env_pgdir, p, va, PTE_W|PTE_U))
-      panic("page insert failed.\n");
-  }
+	void *start, *end, *i;
+	struct PageInfo *p;
+	int res;
+
+	start = (void *) ROUNDDOWN((uint32_t) va, PGSIZE);
+	end = (void *) ROUNDUP((uint32_t) va + len, PGSIZE);
+	p = NULL;
+	for( i = start; i < end; i += PGSIZE) {
+		p = page_alloc(0);
+		if (p == NULL)
+			panic("region alloc failed: alloc failed!\n");
+
+		res = page_insert(e->env_pgdir, p, i, PTE_W | PTE_U);
+		if (res != 0)
+			panic("region alloc error\n");
+	}
+
 }
 
 //
@@ -326,7 +339,7 @@ load_icode(struct Env *e, uint8_t *binary)
 {
 	// Hints:
 	//  Load each program segment into virtual memory
-	//  at the address specified in the ELF segment header.
+	//  at the address specified in the ELF section header.
 	//  You should only load segments with ph->p_type == ELF_PROG_LOAD.
 	//  Each segment's virtual address can be found in ph->p_va
 	//  and its size in memory can be found in ph->p_memsz.
@@ -351,31 +364,33 @@ load_icode(struct Env *e, uint8_t *binary)
 	//  You must also do something with the program's entry point,
 	//  to make sure that the environment starts executing there.
 	//  What?  (See env_run() and env_pop_tf() below.)
+	struct Elf *header;
+	struct Proghdr *ph, *eph;
 
-	// LAB 3: Your code here.
-  struct Elf *env_elf = (struct Elf *)binary;
-  struct Proghdr *ph, *eph;
-  if(env_elf->e_magic!=ELF_MAGIC)
-    panic("Invalid ELF header\n");
-  ph = (struct Proghdr *)((uint8_t *)env_elf + env_elf->e_phoff);
-  eph = ph + env_elf->e_phnum;
-  lcr3(PADDR(e->env_pgdir));
-  for(;ph<eph;ph++){
-    if(ph->p_type == ELF_PROG_LOAD){
-      if(ph->p_filesz>ph->p_memsz)
-        panic("memory not enough\n");
-      region_alloc(e, (void *)ph->p_va, ph->p_memsz);
-      memmove((void *)ph->p_va, (void *)(binary + ph->p_offset), ph->p_filesz);
-      memset((void *)(ph->p_va + ph->p_filesz), 0, ph->p_memsz - ph->p_filesz);
-    }
-  }
-  e->env_tf.tf_eip = env_elf->e_entry;
-  lcr3(PADDR(kern_pgdir));
+	header = (struct Elf*) binary;
+	if (header->e_magic != ELF_MAGIC) 
+		panic("load_icode failed: The binary loaded is not elf.\n");
+	if (header->e_entry == 0)
+		panic("load_icode failed: The elf file cant't be executed.\n");
+
+	e->env_tf.tf_eip = header->e_entry;
+	lcr3(PADDR(e->env_pgdir));
+
+	ph = (struct Proghdr *) ((uint8_t *) header + header->e_phoff);
+	eph = ph + header->e_phnum;
+	for (; ph < eph; ph++) {
+		if (ph->p_type == ELF_PROG_LOAD) {
+			if (ph->p_memsz < ph->p_filesz)
+				panic("load_icode failed: p_memsz < p_filesz.\n");
+
+			region_alloc(e, (void *) ph->p_va, ph->p_memsz);
+			memmove((void *) ph->p_va, binary + ph->p_offset, ph->p_filesz);
+			memset((void *) (ph->p_va + ph->p_filesz), 0, ph->p_memsz - ph->p_filesz);
+		}
+	}
 	// Now map one page for the program's initial stack
 	// at virtual address USTACKTOP - PGSIZE.
-
-	// LAB 3: Your code here.
-  region_alloc(e, (void *)(USTACKTOP-PGSIZE), PGSIZE);
+	region_alloc(e, (void *) (USTACKTOP - PGSIZE), PGSIZE);
 }
 
 //
@@ -388,12 +403,14 @@ load_icode(struct Env *e, uint8_t *binary)
 void
 env_create(uint8_t *binary, enum EnvType type)
 {
-	// LAB 3: Your code here.
-  struct Env *e;
-  if(env_alloc(&e, 0))
-    panic("env alloc failed.\n");
-  e->env_type = type;
-  load_icode(e, binary);
+	struct Env *e;
+
+	if(env_alloc(&e, 0) != 0)
+		panic("env_create failed: env_alloc failed!\n");
+
+	load_icode(e, binary);
+	e->env_type = type;
+	e->env_parent_id = 0;
 }
 
 //
@@ -486,13 +503,14 @@ env_pop_tf(struct Trapframe *tf)
 	// Record the CPU we are running on for user-space debugging
 	curenv->env_cpunum = cpunum();
 
-	asm volatile(
-		"\tmovl %0,%%esp\n"
+	__asm __volatile("movl %0,%%esp\n"
+		//"\tfxrstor (%%esp)\n"
+		//"\taddl $524,%%esp\n"
 		"\tpopal\n"
 		"\tpopl %%es\n"
 		"\tpopl %%ds\n"
 		"\taddl $0x8,%%esp\n" /* skip tf_trapno and tf_errcode */
-		"\tiret\n"
+		"\tiret"
 		: : "g" (tf) : "memory");
 	panic("iret failed");  /* mostly to placate the compiler */
 }
@@ -522,14 +540,17 @@ env_run(struct Env *e)
 	//	e->env_tf.  Go back through the code you wrote above
 	//	and make sure you have set the relevant parts of
 	//	e->env_tf to sensible values.
+	if (curenv != NULL && curenv->env_status == ENV_RUNNING)
+		curenv->env_status = ENV_RUNNABLE;
 
-	// LAB 3: Your code here.
-  if(curenv!=NULL && curenv->env_status == ENV_RUNNING)
-    curenv->env_status == ENV_RUNNABLE;
-  curenv = e;
-  curenv->env_status = ENV_RUNNING;
-  curenv->env_runs++;
-  lcr3(PADDR(curenv->env_pgdir));
-  env_pop_tf(&(curenv->env_tf));
+	curenv = e;
+	curenv->env_status = ENV_RUNNING;
+	curenv->env_runs++;
+	lcr3(PADDR(curenv->env_pgdir));
+	
+	unlock_kernel();
+	env_pop_tf(&curenv->env_tf);
+	
+	panic("env_run not yet implemented");
 }
 
