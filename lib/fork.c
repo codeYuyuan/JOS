@@ -72,7 +72,7 @@ duppage(envid_t envid, unsigned pn)
     int perm = PTE_P|PTE_U;
     if((pte&PTE_W)||(pte&PTE_COW))
         perm|=PTE_COW;
-    if((r = sys_page_map(penvid,addr,envid,addr,PTE_U|PTE_P|PTE_W))){
+    if((r = sys_page_map(penvid,addr,envid,addr,PTE_U|PTE_P|PTE_COW))){
         panic("duppage:page remap faild:%e",r);
         return r;
     }

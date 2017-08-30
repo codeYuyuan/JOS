@@ -227,7 +227,7 @@ trap_dispatch(struct Trapframe *tf)
 				tf->tf_regs.reg_edi,
 				tf->tf_regs.reg_esi);
 			tf->tf_regs.reg_eax = ret_code;
-		       	return;	
+		       	return;
 	}
 
 	// Handle spurious interrupts
@@ -242,11 +242,12 @@ trap_dispatch(struct Trapframe *tf)
 	// Handle clock interrupts. Don't forget to acknowledge the
 	// interrupt using lapic_eoi() before calling the scheduler!
 	// LAB 4: Your code here.
-	if (tf->tf_trapno == IRQ_OFFSET + IRQ_TIMER) {
-		lapic_eoi();
-		sched_yield();
-		return;
-	}
+
+    if(tf->tf_trapno == IRQ_OFFSET){
+        lapic_eoi();
+        sched_yield();
+        return;
+    }
 	// Unexpected trap: The user process or the kernel has a bug.
 	if (tf->tf_cs == GD_KT)
 		panic("unhandled trap in kernel %d", tf->tf_trapno);
@@ -262,7 +263,7 @@ trap(struct Trapframe *tf)
 	// The environment may have set DF and some versions
 	// of GCC rely on DF being clear
 	asm volatile("cld" ::: "cc");
-	
+
 	// Halt the CPU if some other CPU has called panic()
 	extern char *panicstr;
 	if (panicstr)
@@ -284,7 +285,7 @@ trap(struct Trapframe *tf)
 		// LAB 4: Your code here.
 		lock_kernel();
 		assert(curenv);
-		
+
 		// Garbage collect if current enviroment is a zombie
 		if (curenv->env_status == ENV_DYING) {
 			env_free(curenv);
@@ -326,7 +327,7 @@ page_fault_handler(struct Trapframe *tf)
 	fault_va = rcr2();
 
 	// Handle kernel-mode page faults.
-	if (tf->tf_cs == GD_KT) 
+	if (tf->tf_cs == GD_KT)
 		panic("page_fault in kernel mode, fault address: %d\n", fault_va);
 
 	// We've already handled kernel-mode exceptions, so if we get here,
@@ -364,9 +365,9 @@ page_fault_handler(struct Trapframe *tf)
 	struct UTrapframe *utf;
 
 	if (curenv->env_pgfault_upcall) {
-		if (UXSTACKTOP - PGSIZE <= tf->tf_esp && tf->tf_esp <= UXSTACKTOP - 1) 
+		if (UXSTACKTOP - PGSIZE <= tf->tf_esp && tf->tf_esp <= UXSTACKTOP - 1)
 			utf = (struct UTrapframe *)(tf->tf_esp - sizeof(struct UTrapframe) - 4);
-		else 
+		else
 			utf = (struct UTrapframe *)(UXSTACKTOP - sizeof(struct UTrapframe));
 		user_mem_assert(curenv, (void *)utf, sizeof(struct UTrapframe), PTE_U | PTE_W);
 
