@@ -291,6 +291,7 @@ fshandler handlers[] = {
 	[FSREQ_SYNC] =		serve_sync
 };
 
+#define NHANDLERS (sizeof(handlers)/sizeof(handlers[0]))
 void
 serve(void)
 {
@@ -315,7 +316,7 @@ serve(void)
 		pg = NULL;
 		if (req == FSREQ_OPEN) {
 			r = serve_open(whom, (struct Fsreq_open*)fsreq, &pg, &perm);
-		} else if (req < ARRAY_SIZE(handlers) && handlers[req]) {
+		} else if (req <NHANDLERS && handlers[req]) {
 			r = handlers[req](whom, fsreq);
 		} else {
 			cprintf("Invalid request code %d from %08x\n", req, whom);

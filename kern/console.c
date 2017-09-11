@@ -103,7 +103,7 @@ serial_init(void)
 
 	// Enable serial interrupts
 	if (serial_exists)
-		irq_setmask_8259A(irq_mask_8259A & ~(1<<IRQ_SERIAL));
+		irq_setmask_8259A(irq_mask_8259A & ~(1<<4));
 }
 
 
