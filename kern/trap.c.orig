@@ -243,14 +243,17 @@ trap_dispatch(struct Trapframe *tf)
 	// interrupt using lapic_eoi() before calling the scheduler!
 	// LAB 4: Your code here.
 
+<<<<<<< HEAD
 	// Handle keyboard and serial interrupts.
 	// LAB 5: Your code here.
 
+=======
     if(tf->tf_trapno == IRQ_OFFSET){
         lapic_eoi();
         sched_yield();
         return;
     }
+>>>>>>> lab4
 	// Unexpected trap: The user process or the kernel has a bug.
 	if (tf->tf_cs == GD_KT)
 		panic("unhandled trap in kernel %d", tf->tf_trapno);
